@@ -21,6 +21,10 @@ const BaseSchema = new mongoose.Schema({
     businessName:{
         type:String,
         required:true
+    },
+    token:{
+        type:String,
+        default:null
     }
 },{timestamps:true})
 const User = mongoose.model("users",BaseSchema)

@@ -3,17 +3,19 @@ const express = require("express")
 const jwt = require('jsonwebtoken');
 const multer = require("multer")
 const fs = require("fs")
-const Connection = require("./Connection")
-const User = require("./Model/User")
-const TokenChecker = require("./utils/TokenChecker")
 const cors = require("cors");
+const bcrypt = require("bcrypt")
+const crypto = require("crypto")
+const Connection = require("./Connection")
+const TokenChecker = require("./utils/TokenChecker")
+const User = require("./Model/User")
 const Menu = require("./Model/Menu");
 const app = express()
 const PORT = 3010
 app.use(express.json())
 app.use(cors())
-Connection()
 app.use("/uploads",express.static("uploads"))
+Connection()
 
 app.post("/createUser",async(req,resp)=>{
     try {
@@ -23,7 +25,9 @@ app.post("/createUser",async(req,resp)=>{
      const existingUser = await User.findOne({email:email?.trim()?.toLowerCase()})
      if(existingUser) return resp.status(405).send({message:"Account related to this email already exists"})
 
-     const newUser = new User({name,phone,email:email?.trim()?.toLowerCase(),password,businessName})
+     const salt = await bcrypt.genSalt(10)
+     const hashpassword= await bcrypt.hash(password,salt)
+     const newUser = new User({name,phone,email:email?.trim()?.toLowerCase(),password:hashpassword,businessName})
      await newUser.save()
      return resp.status(201).send({message:"Account created successfully",data:newUser})
 
@@ -39,10 +43,16 @@ app.post("/verifyUser",async(req,resp)=>{
 
      const existingUser = await User.findOne({email:email?.trim()?.toLowerCase()})
      if(!existingUser) return resp.status(404).send({message:"Invalid Credentials"})
-     if(existingUser.password!==password) return resp.status(400).send({message:"Invalid Credentials"})
-     const payload = {
-        id:existingUser._id
-     }
+     const compare = await bcrypt.compare(password,existingUser.password)
+     if(!compare) return resp.status(400).send({message:"Invalid Credentials"})
+    
+     const rawToken= crypto.randomBytes(8).toString('hex')
+     const salt = await bcrypt.genSalt(10)
+     const hashedToken = await bcrypt.hash(rawToken,salt)
+     existingUser.token = hashedToken
+     await existingUser.save()
+    
+     const payload = {id:existingUser._id,rawToken}
      const token = jwt.sign(payload,"Helloworld@123")
      return resp.status(202).send({message:"Login Successfully",token})
     } catch (error) {
@@ -50,6 +60,14 @@ app.post("/verifyUser",async(req,resp)=>{
     }
 })
 
+app.post("/logout",TokenChecker,async(req,resp)=>{
+    try {
+       await User.findByIdAndUpdate(req.user._id,{token:null},{new:true,runValidators:true})
+       return resp.status(202).send({message:"Logged out"})
+    } catch (error) {
+        return resp.status(500).send({message:"Internal Server Error",error})
+    }
+})
 
 app.get("/getUser",TokenChecker,async(req,resp)=>{
   const {name,phone,email,businessName} = req.user
@@ -72,11 +90,26 @@ const upload = multer({storage:storage1})
 
 
 app.post("/createMenu",TokenChecker,upload.single("image"),async(req,resp)=>{
+    const file = req.file?"uploads/"+req.file.filename:null
     try {
         const {name,price,category} = req.body
-        if(!name || !price || !category || !name.trim() || !price.trim() || !category.trim()) return resp.status(400).send({message:"Fields are required"})
-        if(!Number(price)) return resp.status(400).send({message:"Invalid price"})
-        if(!req.file) return resp.status(400).send({message:"Menu Image is required"})
+        if(!name || !price || !category || !name.trim() || !price.trim() || !category.trim()) {
+            if(file){
+                const data = await deleteImage(file)
+                if(!data.status) return resp.status(400).send({message:"Failed to delete the image"})
+            }
+            return resp.status(400).send({message:"Fields are required"})
+        }
+        if(!Number(price)) {
+            if(file){
+                const data = await deleteImage(file)
+                if(!data.status) return resp.status(400).send({message:"Failed to delete the image"})
+            }
+            return resp.status(400).send({message:"Invalid price"})
+        }
+        if(!file) {
+            return resp.status(400).send({message:"Menu Image is required"})
+        }
         
         const updatedName = name.trim().slice(0,1).toUpperCase() + name.trim().slice(1).toLowerCase()
         const updatedCategory = category.trim().toLowerCase()
@@ -84,10 +117,14 @@ app.post("/createMenu",TokenChecker,upload.single("image"),async(req,resp)=>{
         const existingMenu = await Menu.findOne({name:updatedName,category:updatedCategory,userId:req.user._id})
         if(existingMenu) return resp.status(405).send({message:"This menu already exists with this name."})
         
-        const newMenu = new Menu({name:updatedName,category:updatedCategory,price:Number(price).toFixed(2),image:"uploads/"+req.file.filename,userId:req.user._id})
+        const newMenu = new Menu({name:updatedName,category:updatedCategory,price:Number(price).toFixed(2),image:file,userId:req.user._id})
         await newMenu.save()
         return resp.status(201).send({message:"Menu addded successfully"})
     } catch (error) {
+        if(file){
+            const data = await deleteImage(file)
+            if(!data.status) return resp.status(400).send({message:"Failed to delete the image"})
+        }
         return resp.status(500).send({message:"Internal Server Error",error})
     }
 })
