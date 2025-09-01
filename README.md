@@ -59,7 +59,7 @@ A secure and scalable Node.js backend for a restaurant management system, built 
 
 4) Users (Home-page) → View all restaurants with their business details
 
-5)FoodMenu → Explore menus with category-based filtering
+5) FoodMenu → Explore menus with category-based filtering
 
 🎯 Purpose
 
